@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Light the candles</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: #d4a574;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .scene {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Image frame keeps the background image at its native 731:1280
+       aspect. The viewport just letterboxes around it on shapes that
+       don't match. Flame positions are percentages of THIS frame, so
+       they always sit on top of the right candle. */
+    .image-frame {
+      position: relative;
+      width:  min(100vw, 100vh * 731 / 1280);
+      height: min(100vh, 100vw * 1280 / 731);
+      background: url('background.png') center / cover no-repeat;
+      overflow: hidden;
+    }
+
+    .flames {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    /* Per-flame wrapper. (cx, cy) is the flame's anchor point in image
+       % coords; --s scales it; --blur applies depth-of-field bokeh.
+       Width is a percentage of the image so flames stay correctly sized
+       relative to the candles regardless of viewport. */
+    .flame-pos {
+      position: absolute;
+      left: var(--cx);
+      top: var(--cy);
+      width: 3.6%;
+      aspect-ratio: 22 / 38;
+      transform: translate(-50%, -100%) scale(var(--s, 1));
+      transform-origin: 50% 100%;
+      filter: blur(var(--blur, 0px));
+      pointer-events: none;
+    }
+
+    /* Soft halo around each flame. Hidden until the candle is lit. */
+    .glow {
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      transform: translate(-50%, 50%);
+      width: 1100%;
+      aspect-ratio: 1;
+      background:
+        radial-gradient(circle,
+          rgba(255, 220, 140, 0.85) 0%,
+          rgba(255, 180, 80, 0.55) 18%,
+          rgba(255, 130, 40, 0.32) 40%,
+          rgba(255, 90, 25, 0.12) 65%,
+          rgba(255, 80, 20, 0) 85%);
+      opacity: 0;
+      transition: opacity 0.7s ease 0.1s;
+      pointer-events: none;
+      filter: blur(14px);
+      z-index: 0;
+    }
+
+    .flame-pos.lit .glow {
+      opacity: 1;
+      animation: glow-pulse 2.6s ease-in-out infinite alternate;
+    }
+
+    /* Flame structure — fills its parent (.flame-pos) so it scales with the image.
+       The drop-shadow filter casts a warm halo around the flame's actual silhouette
+       (not its bounding box), giving it a sharper bloom than a uniform glow. */
+    .flame {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 2;
+      filter:
+        drop-shadow(0 0 4px rgba(255, 200, 90, 0.85))
+        drop-shadow(0 0 14px rgba(255, 140, 50, 0.55))
+        drop-shadow(0 0 28px rgba(255, 100, 30, 0.30));
+    }
+
+    .flame-drift {
+      position: absolute;
+      inset: 0;
+      transform-origin: 50% 100%;
+      will-change: transform;
+    }
+
+    .flame-wrap {
+      position: absolute;
+      inset: 0;
+      transform: scale(0);
+      transform-origin: 50% 100%;
+      will-change: transform;
+    }
+
+    .flame-pos.lit .flame-drift {
+      animation: flame-drift var(--drift-d, 3.2s) ease-in-out var(--drift-delay, 0s) infinite;
+    }
+
+    .flame-pos.lit .flame-wrap {
+      animation:
+        flame-ignite 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards,
+        flame-sway var(--sway-d, 0.18s) ease-in-out var(--sway-delay, 0.45s) infinite alternate;
+    }
+
+    .flame-outer,
+    .flame-inner {
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      transform: translateX(-50%);
+      border-radius: 50% 50% 30% 30% / 65% 65% 35% 35%;
+    }
+
+    .flame-outer {
+      width: 130%;
+      height: 110%;
+      left: 50%;
+      transform: translateX(-50%);
+      background:
+        radial-gradient(ellipse at 50% 92%,
+          rgba(255, 230, 130, 1) 0%,
+          rgba(255, 175, 55, 0.92) 25%,
+          rgba(255, 110, 30, 0.6) 50%,
+          rgba(255, 70, 10, 0.25) 75%,
+          rgba(255, 60, 0, 0) 100%);
+      filter: blur(4px);
+    }
+
+    .flame-inner {
+      width: 60%;
+      height: 75%;
+      background:
+        radial-gradient(ellipse at 50% 78%,
+          #fffdf0 0%,
+          #fff2c0 22%,
+          #ffd070 50%,
+          #ff9c30 78%,
+          rgba(255, 100, 0, 0) 100%);
+      filter: blur(1px);
+    }
+
+    @keyframes flame-ignite {
+      0%   { transform: scale(0) translateY(6px); opacity: 0; }
+      30%  { transform: scale(1.25, 1.4); opacity: 1; }
+      60%  { transform: scale(0.9, 0.95); }
+      100% { transform: scale(1, 1); opacity: 1; }
+    }
+
+    @keyframes flame-sway {
+      0%   { transform: scale(0.97, 1.03) rotate(-1.8deg) translateY(0); }
+      100% { transform: scale(1.06, 0.94) rotate(1.8deg) translateY(-1px); }
+    }
+
+    @keyframes flame-drift {
+      0%, 100% { transform: translate(0, 0); }
+      18%      { transform: translate(-0.7px, -0.5px); }
+      37%      { transform: translate(0.6px, -1.1px); }
+      56%      { transform: translate(0.9px, -0.3px); }
+      78%      { transform: translate(-0.5px, 0.4px); }
+    }
+
+    @keyframes glow-pulse {
+      0%   { opacity: 0.7; transform: translate(-50%, 50%) scale(0.94); }
+      100% { opacity: 1;   transform: translate(-50%, 50%) scale(1.06); }
+    }
+
+    /* ---------- Hint label ---------- */
+    .hint {
+      position: fixed;
+      left: 50%;
+      bottom: calc(4vh + 108px);
+      transform: translateX(-50%);
+      font-size: 11px;
+      letter-spacing: 0.32em;
+      color: rgba(230, 200, 160, 0.85);
+      text-transform: uppercase;
+      z-index: 9;
+      transition: opacity 0.5s ease;
+      pointer-events: none;
+      white-space: nowrap;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.85);
+    }
+
+    .hint.hide { opacity: 0; }
+
+    /* ---------- Hold button ---------- */
+    .hold-btn {
+      position: fixed;
+      left: 50%;
+      bottom: 4vh;
+      transform: translateX(-50%);
+      width: 92px;
+      height: 92px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      z-index: 10;
+      touch-action: none;
+      transition: opacity 0.7s ease, transform 0.7s ease;
+      outline: none;
+    }
+
+    .hold-btn::before {
+      content: "";
+      position: absolute;
+      inset: 9px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 35% 30%,
+          rgba(255, 220, 160, 0.18) 0%,
+          rgba(50, 24, 12, 0.55) 65%,
+          rgba(20, 10, 6, 0.9) 100%);
+      border: 1px solid rgba(255, 180, 100, 0.35);
+      box-shadow:
+        inset 0 0 22px rgba(255, 150, 80, 0.18),
+        0 0 18px rgba(255, 130, 50, 0.12),
+        0 4px 14px rgba(0,0,0,0.5);
+      transition: box-shadow 0.25s ease;
+    }
+
+    .hold-btn.active::before {
+      box-shadow:
+        inset 0 0 30px rgba(255, 200, 110, 0.55),
+        0 0 36px rgba(255, 150, 70, 0.5),
+        0 4px 18px rgba(0,0,0,0.5);
+    }
+
+    .hold-btn .ring {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);
+    }
+
+    .ring-track {
+      fill: none;
+      stroke: rgba(255, 180, 100, 0.14);
+      stroke-width: 3;
+    }
+
+    .ring-progress {
+      fill: none;
+      stroke: #ffaa55;
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-dasharray: 276.46;
+      stroke-dashoffset: 276.46;
+      filter: drop-shadow(0 0 5px rgba(255, 160, 60, 0.85));
+      transition: stroke-dashoffset 0.05s linear;
+    }
+
+    .hold-btn.releasing .ring-progress {
+      transition: stroke-dashoffset 0.45s ease-out;
+    }
+
+    .hold-label {
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      color: rgba(255, 210, 155, 0.92);
+      font-weight: 500;
+      text-shadow: 0 0 10px rgba(255, 130, 50, 0.55);
+      position: relative;
+      z-index: 1;
+    }
+
+    .hold-btn.done {
+      opacity: 0;
+      transform: translateX(-50%) scale(0.7);
+      pointer-events: none;
+    }
+
+    @media (max-width: 480px) {
+      .hint { font-size: 10px; bottom: calc(3vh + 100px); }
+      .hold-btn { width: 84px; height: 84px; bottom: 3vh; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .flame-pos.lit .flame-wrap {
+        animation: flame-ignite 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+      }
+      .flame-pos.lit .glow { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="scene" aria-hidden="true">
+    <div class="image-frame">
+      <div class="flames" id="flames"></div>
+    </div>
+  </div>
+
+  <button class="hold-btn" id="holdBtn" type="button" aria-label="Hold to light the candles">
+    <svg viewBox="0 0 100 100" class="ring" aria-hidden="true">
+      <circle cx="50" cy="50" r="44" class="ring-track" />
+      <circle cx="50" cy="50" r="44" class="ring-progress" id="ringProgress" />
+    </svg>
+    <span class="hold-label">HOLD</span>
+  </button>
+
+  <div class="hint" id="hint">Hold to light</div>
+
+  <script>
+    (function () {
+      const flamesContainer = document.getElementById("flames");
+      const btn = document.getElementById("holdBtn");
+      const ring = document.getElementById("ringProgress");
+      const hint = document.getElementById("hint");
+
+      // Hand-positioned flames over the candles in the background image.
+      // (cx, cy) = bottom of the flame in image % coords, s = scale.
+      // cy lands at the rim of each candle's hollow opening so the flame
+      // appears to rise out of the wick. Order is front-to-back.
+      const FLAMES = [
+        { cx: 50, cy: 70.8, s: 1.70 },  // front candle (biggest, in focus)
+        { cx: 50, cy: 56.7, s: 0.90 },
+        { cx: 50, cy: 48.5, s: 0.50 },
+        { cx: 50, cy: 43.8, s: 0.30 },
+        { cx: 50, cy: 39.6, s: 0.18 },
+        { cx: 50, cy: 37.0, s: 0.11 },
+        { cx: 50, cy: 34.8, s: 0.07 },
+      ];
+
+      const hash = (a, b) => {
+        const v = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453;
+        return v - Math.floor(v);
+      };
+
+      FLAMES.forEach((p, i) => {
+        const el = document.createElement("div");
+        el.className = "flame-pos";
+        el.style.setProperty("--cx", p.cx + "%");
+        el.style.setProperty("--cy", p.cy + "%");
+        el.style.setProperty("--s", p.s);
+        // Match the bokeh in the photo — back flames soften.
+        const t = i / (FLAMES.length - 1);
+        const blur = (Math.pow(t, 1.4) * 1.6).toFixed(2);
+        el.style.setProperty("--blur", blur + "px");
+        // Wide spread of durations + a random phase offset on each animation
+        // so the flames never line up with each other.
+        el.style.setProperty("--sway-d", (0.14 + hash(i, 7) * 0.18).toFixed(3) + "s");
+        el.style.setProperty("--sway-delay", (0.45 + hash(i, 11) * 1.6).toFixed(3) + "s");
+        el.style.setProperty("--drift-d", (2.4 + hash(i, 2) * 4.6).toFixed(2) + "s");
+        el.style.setProperty("--drift-delay", (hash(i, 5) * 5.0).toFixed(2) + "s");
+        el.dataset.order = i;
+        el.innerHTML =
+          '<div class="glow"></div>' +
+          '<div class="wick"></div>' +
+          '<div class="flame"><div class="flame-drift"><div class="flame-wrap">' +
+          '<div class="flame-outer"></div><div class="flame-inner"></div>' +
+          '</div></div></div>';
+        flamesContainer.appendChild(el);
+      });
+
+      // ---- Hold-to-charge progress ----
+      const HOLD_MS = 1500;
+      const CIRC = 2 * Math.PI * 44;
+      let holding = false;
+      let startTime = 0;
+      let raf = null;
+      let lit = false;
+
+      function tick() {
+        if (!holding) return;
+        const pct = Math.min((performance.now() - startTime) / HOLD_MS, 1);
+        ring.style.strokeDashoffset = String(CIRC * (1 - pct));
+        if (pct >= 1) {
+          triggerLight();
+          holding = false;
+          if (raf) cancelAnimationFrame(raf);
+          return;
+        }
+        raf = requestAnimationFrame(tick);
+      }
+
+      function start(e) {
+        if (lit) return;
+        if (e && typeof e.pointerId === "number") {
+          try { btn.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+        }
+        holding = true;
+        startTime = performance.now();
+        btn.classList.remove("releasing");
+        btn.classList.add("active");
+        hint.classList.add("hide");
+        raf = requestAnimationFrame(tick);
+      }
+
+      function release() {
+        if (lit) return;
+        if (!holding) return;
+        holding = false;
+        if (raf) cancelAnimationFrame(raf);
+        btn.classList.remove("active");
+        btn.classList.add("releasing");
+        ring.style.strokeDashoffset = String(CIRC);
+        hint.classList.remove("hide");
+        setTimeout(() => btn.classList.remove("releasing"), 450);
+      }
+
+      function triggerLight() {
+        lit = true;
+        btn.classList.add("done");
+        hint.classList.add("hide");
+        const all = Array.from(document.querySelectorAll(".flame-pos"));
+        all.sort((a, b) => parseFloat(a.dataset.order) - parseFloat(b.dataset.order));
+        all.forEach((el, i) => {
+          setTimeout(() => el.classList.add("lit"), 80 + i * 130);
+        });
+      }
+
+      btn.addEventListener("pointerdown", start);
+      btn.addEventListener("pointerup", release);
+      btn.addEventListener("pointercancel", release);
+      btn.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      // Keyboard: hold Space / Enter
+      let keyHeld = false;
+      btn.addEventListener("keydown", (e) => {
+        if ((e.key === " " || e.key === "Enter") && !keyHeld) {
+          keyHeld = true;
+          start();
+        }
+      });
+      btn.addEventListener("keyup", (e) => {
+        if (e.key === " " || e.key === "Enter") {
+          keyHeld = false;
+          release();
+        }
+      });
+      btn.addEventListener("blur", () => { keyHeld = false; release(); });
+    })();
+  </script>
+</body>
+</html>
